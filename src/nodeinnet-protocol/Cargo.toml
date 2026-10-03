@@ -1,0 +1,27 @@
+[package]
+name = "nodeinnet-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "The node.in.net wire contract, vendored from p2p-common: account payloads, the node and resource model, signalling types and the peer-to-peer message set. Types and (de)serialisation only, no I/O."
+license = "MIT OR Apache-2.0"
+publish = false
+
+
+[dependencies]
+serde = { workspace = true }
+uuid = { version = "1.4", features = ["serde", "v4"] }
+# No `clock`: it links iana-time-zone, and this crate only parses instants.
+chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
+# Feature set must match the reference client so the wire encoding cannot drift.
+bson = { version = "3.1.0", features = ["serde", "uuid-1", "chrono-0_4"] }
+serde_bytes = "0.11.19"
+argon2 = "0.5"
+base64 = "0.21"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+hex = "0.4.3"
+hmac = "0.12.1"
+rand = "0.8"
+sha2 = "0.10.8"
+
+[dev-dependencies]
+serde_json = { workspace = true }

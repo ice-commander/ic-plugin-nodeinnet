@@ -1,0 +1,33 @@
+[package]
+name = "ic-node-in-net-fs"
+version = "0.0.0"
+edition = "2021"
+description = "Browses a peer over the Node In Net protocol"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ic-plugin-api = { workspace = true }
+nodeinnet-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bson = { version = "3.1.0", features = ["serde"] }
+tokio-tungstenite = { version = "0.20", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+async-trait = "0.1"
+chrono = "0.4"
+uuid = { version = "1.8", features = ["v4"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+tokio = { workspace = true }
+client-core = { workspace = true }
+p2p-handlers = { workspace = true }
+p2p-node = { workspace = true }
+
+[dev-dependencies]
+
+[features]
+default = ["export-abi"]
+export-abi = []

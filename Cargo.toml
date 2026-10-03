@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "src/node-in-net-fs",
+    "src/nodeinnet-protocol",
+    "src/p2p-node",
+    "src/client-core",
+    "src/node-functions",
+    "src/p2p-handlers",
+]
+resolver = "2"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+bytes = { version = "1.6", features = ["serde"] }
+serde_json = "1.0"
+
+nodeinnet-protocol = { path = "src/nodeinnet-protocol" }
+p2p-node = { path = "src/p2p-node", default-features = false }
+# Screen sharing off: Cisco's OpenH264 royalty grant covers Cisco's binary, not one built here.
+client-core = { path = "src/client-core", default-features = false }
+node-functions = { path = "src/node-functions" }
+# Files only: no terminal, desktop, registry or proxy is served to a peer.
+p2p-handlers = { path = "src/p2p-handlers", default-features = false, features = ["feature-fm"] }
+ic-plugin-api = { git = "https://github.com/ice-commander/plugin-api.git", branch = "main" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

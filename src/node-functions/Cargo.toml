@@ -1,0 +1,15 @@
+[package]
+name = "node-functions"
+version = "0.1.0"
+edition = "2021"
+description = "The local filesystem a peer is allowed to reach"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+nodeinnet-protocol = { workspace = true }
+tokio = { workspace = true }
+chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
