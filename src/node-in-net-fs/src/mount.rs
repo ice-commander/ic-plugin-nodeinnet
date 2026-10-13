@@ -160,9 +160,18 @@ extern "C" fn last_error(handle: IcFsHandle) -> *const c_char {
     let Some(mounted) = held(handle) else {
         return std::ptr::null();
     };
-    let said = CString::new(mounted.trouble.borrow().clone()).unwrap_or_default();
-    *mounted.said.borrow_mut() = said;
-    mounted.said.borrow().as_ptr()
+    hand_over(&mounted.trouble, &mounted.said)
+}
+
+fn hand_over(trouble: &RefCell<String>, said: &RefCell<CString>) -> *const c_char {
+    let handed = std::mem::take(&mut *trouble.borrow_mut());
+    *said.borrow_mut() = CString::new(handed).unwrap_or_default();
+    let said = said.borrow();
+    if said.as_bytes().is_empty() {
+        std::ptr::null()
+    } else {
+        said.as_ptr()
+    }
 }
 
 extern "C" fn write(handle: IcFsHandle, path: *const c_char, bytes: *const u8, len: u64) -> c_int {
@@ -401,5 +410,25 @@ pub fn connection(fs: *const IcFsVTable) -> IcConnectionVTable {
         fs,
         describe: None,
         on_event: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failure_is_handed_over_once_and_then_forgotten() {
+        let trouble = RefCell::new(String::new());
+        let said = RefCell::new(CString::default());
+        assert!(hand_over(&trouble, &said).is_null(), "nothing has failed yet");
+
+        *trouble.borrow_mut() = "the peer went away".to_string();
+        let first = hand_over(&trouble, &said);
+        assert!(!first.is_null(), "the failure gave no reason");
+        let text = unsafe { std::ffi::CStr::from_ptr(first) }.to_string_lossy().into_owned();
+        assert_eq!(text, "the peer went away");
+
+        assert!(hand_over(&trouble, &said).is_null(), "the same failure was reported twice");
     }
 }
