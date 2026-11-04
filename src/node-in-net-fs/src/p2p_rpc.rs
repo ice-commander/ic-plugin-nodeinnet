@@ -1,11 +1,5 @@
 use client_core::NetCmd;
-use std::cell::RefCell;
 use std::collections::HashMap;
-
-thread_local! {
-    static P2P_DOWNLOAD_PROGRESS_CALLBACKS: RefCell<HashMap<uuid::Uuid, Box<dyn Fn(u64) + 'static>>> =
-        RefCell::new(HashMap::new());
-}
 
 fn peer_terminals() -> &'static std::sync::Mutex<HashMap<String, String>> {
     static PEER_TERMINALS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
@@ -25,23 +19,36 @@ pub fn peer_terminal(peer_id: &str) -> Option<String> {
         .cloned()
 }
 
+fn progress_so_far() -> &'static std::sync::Mutex<HashMap<uuid::Uuid, u64>> {
+    static HELD: std::sync::OnceLock<std::sync::Mutex<HashMap<uuid::Uuid, u64>>> =
+        std::sync::OnceLock::new();
+    HELD.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
 pub fn fire_download_progress(transfer_id: uuid::Uuid, bytes_read: u64) {
-    P2P_DOWNLOAD_PROGRESS_CALLBACKS.with(|map| {
-        if let Some(cb) = map.borrow().get(&transfer_id) {
-            cb(bytes_read);
-        }
-    });
+    if let Ok(mut held) = progress_so_far().lock() {
+        held.insert(transfer_id, bytes_read);
+    }
+}
+
+fn forget_progress(transfer_id: uuid::Uuid) {
+    if let Ok(mut held) = progress_so_far().lock() {
+        held.remove(&transfer_id);
+    }
+}
+
+fn progress_of(transfer_id: uuid::Uuid) -> Option<u64> {
+    progress_so_far().lock().ok()?.get(&transfer_id).copied()
 }
 
 struct ProgressGuard(uuid::Uuid);
 
 impl Drop for ProgressGuard {
     fn drop(&mut self) {
-        P2P_DOWNLOAD_PROGRESS_CALLBACKS.with(|map| {
-            map.borrow_mut().remove(&self.0);
-        });
+        forget_progress(self.0);
     }
 }
+
 use crate::error::AppError;
 use crate::error::RemoteFileEntry;
 use nodeinnet_protocol::P2pMessage;
@@ -315,12 +322,7 @@ impl RemoteFileSystemRpc {
         progress_callback: Option<Box<dyn Fn(u64) + 'static>>,
     ) -> Result<Vec<u8>, AppError> {
         let transfer_id = uuid::Uuid::new_v4();
-        let _progress_guard = progress_callback.map(|pcb| {
-            P2P_DOWNLOAD_PROGRESS_CALLBACKS.with(|map| {
-                map.borrow_mut().insert(transfer_id, pcb);
-            });
-            ProgressGuard(transfer_id)
-        });
+        let _progress_guard = ProgressGuard(transfer_id);
 
         let (rx, _guard) = self.register(transfer_id);
         let temp_path = std::env::temp_dir().join(transfer_id.to_string());
@@ -332,7 +334,26 @@ impl RemoteFileSystemRpc {
             transfer_id,
         })?;
 
-        match Self::await_transfer_end(rx, "download file").await? {
+        let waiting = Self::await_transfer_end(rx, "download file");
+        tokio::pin!(waiting);
+        let mut told = 0u64;
+        let arrived = loop {
+            tokio::select! {
+                done = &mut waiting => break done?,
+                () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                    if let (Some(report), Some(far)) =
+                        (progress_callback.as_ref(), progress_of(transfer_id))
+                    {
+                        if far > told {
+                            told = far;
+                            report(far);
+                        }
+                    }
+                }
+            }
+        };
+
+        match arrived {
             P2pMessage::FileTransferComplete { .. } => std::fs::read(&temp_path)
                 .map_err(|e| AppError::Remote(format!("failed to read the downloaded file: {e}"))),
             P2pMessage::FileTransferResponse {

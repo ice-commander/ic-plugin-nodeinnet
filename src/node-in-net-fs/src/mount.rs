@@ -132,6 +132,54 @@ extern "C" fn list(handle: IcFsHandle, path: *const c_char) -> IcListing {
     }
 }
 
+struct Streaming {
+    body: Vec<u8>,
+    at: usize,
+}
+
+extern "C" fn stream_open(
+    handle: IcFsHandle,
+    path: *const c_char,
+    mode: u32,
+) -> ic_plugin_api::IcFsStream {
+    if mode != ic_plugin_api::IC_OPEN_READ {
+        return std::ptr::null_mut();
+    }
+    let Some(mounted) = held(handle) else {
+        return std::ptr::null_mut();
+    };
+    match awaited(mounted.rpc.read_file(path_of(path), None)) {
+        Ok(body) => Box::into_raw(Box::new(Streaming { body, at: 0 })) as ic_plugin_api::IcFsStream,
+        Err(why) => {
+            blamed(mounted, why);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+extern "C" fn stream_read(stream: ic_plugin_api::IcFsStream, into: *mut u8, len: u64) -> i64 {
+    if stream.is_null() || into.is_null() {
+        return -1;
+    }
+    let open = unsafe { &mut *(stream as *mut Streaming) };
+    let giving = (open.body.len() - open.at).min(len as usize);
+    if giving > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(open.body[open.at..].as_ptr(), into, giving);
+        }
+        open.at += giving;
+    }
+    giving as i64
+}
+
+extern "C" fn stream_close(stream: ic_plugin_api::IcFsStream) -> c_int {
+    if stream.is_null() {
+        return IC_ERR_INIT_FAILED;
+    }
+    drop(unsafe { Box::from_raw(stream as *mut Streaming) });
+    IC_OK
+}
+
 extern "C" fn read(handle: IcFsHandle, path: *const c_char) -> IcBytes {
     let Some(mounted) = held(handle) else {
         return IcBytes::EMPTY;
@@ -400,6 +448,12 @@ pub fn filesystem() -> IcFsVTable {
         action_state: None,
         cell_clicked: None,
         set_permissions: None,
+        stream_open: Some(stream_open),
+        stream_read: Some(stream_read),
+        stream_write: None,
+        stream_close: Some(stream_close),
+        copy_within: None,
+        on_disk: None,
     }
 }
 

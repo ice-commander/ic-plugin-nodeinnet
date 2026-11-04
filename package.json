@@ -1,6 +1,6 @@
 {
 	"name": "ice-commander-node-in-net",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"crate": "ic-node-in-net-fs",
 	"private": true,
 	"description": "The version this plugin reports. builder/gen-version.js copies it into version.rs.",
