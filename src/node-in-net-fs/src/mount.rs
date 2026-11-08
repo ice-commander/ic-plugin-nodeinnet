@@ -141,6 +141,7 @@ extern "C" fn stream_open(
     handle: IcFsHandle,
     path: *const c_char,
     mode: u32,
+    _size: u64,
 ) -> ic_plugin_api::IcFsStream {
     if mode != ic_plugin_api::IC_OPEN_READ {
         return std::ptr::null_mut();
@@ -454,6 +455,7 @@ pub fn filesystem() -> IcFsVTable {
         stream_close: Some(stream_close),
         copy_within: None,
         on_disk: None,
+        stream_abort: None,
     }
 }
 
