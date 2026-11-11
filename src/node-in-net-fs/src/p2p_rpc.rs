@@ -269,6 +269,8 @@ impl RemoteFileSystemRpc {
             resource_id: self.resource_id.clone(),
             file_path,
             transfer_id,
+            offset: 0,
+            length: None,
         }) {
             crate::note(&format!("[P2P] download request not sent: {e}"));
         }
@@ -332,6 +334,8 @@ impl RemoteFileSystemRpc {
             resource_id: self.resource_id.clone(),
             file_path: path,
             transfer_id,
+            offset: 0,
+            length: None,
         })?;
 
         let waiting = Self::await_transfer_end(rx, "download file");

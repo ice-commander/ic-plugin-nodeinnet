@@ -1,12 +1,5 @@
 [workspace]
-members = [
-    "src/node-in-net-fs",
-    "src/nodeinnet-protocol",
-    "src/p2p-node",
-    "src/client-core",
-    "src/node-functions",
-    "src/p2p-handlers",
-]
+members = ["src/node-in-net-fs"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -15,13 +8,12 @@ tokio = { version = "1", features = ["full"] }
 bytes = { version = "1.6", features = ["serde"] }
 serde_json = "1.0"
 
-nodeinnet-protocol = { path = "src/nodeinnet-protocol" }
-p2p-node = { path = "src/p2p-node", default-features = false }
+nodeinnet-protocol = { package = "nodeinnet-p2p", git = "https://github.com/node-in-net/p2p-common", branch = "main" }
+p2p-node = { git = "https://github.com/node-in-net/p2p-common", branch = "main", default-features = false }
 # Screen sharing off: Cisco's OpenH264 royalty grant covers Cisco's binary, not one built here.
-client-core = { path = "src/client-core", default-features = false }
-node-functions = { path = "src/node-functions" }
+client-core = { git = "https://github.com/node-in-net/p2p-common", branch = "main", default-features = false }
 # Files only: no terminal, desktop, registry or proxy is served to a peer.
-p2p-handlers = { path = "src/p2p-handlers", default-features = false, features = ["feature-fm"] }
+p2p-handlers = { git = "https://github.com/node-in-net/p2p-functions", branch = "main", default-features = false, features = ["feature-fm"] }
 ic-plugin-api = { git = "https://github.com/ice-commander/plugin-api.git", branch = "main" }
 
 [profile.release]

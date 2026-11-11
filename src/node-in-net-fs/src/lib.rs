@@ -118,13 +118,13 @@ pub(crate) fn read_setting(key: &str) -> String {
     String::from_utf8_lossy(raw).to_string()
 }
 
-pub(crate) fn write_setting(key: &str, value: Option<&str>, flags: u32) {
+pub fn write_setting(key: &str, value: Option<&str>, flags: u32) -> c_int {
     let host = host();
     if host.is_null() {
-        return;
+        return IC_ERR_INIT_FAILED;
     }
     let (Ok(id), Ok(key)) = (CString::new(ID), CString::new(key)) else {
-        return;
+        return IC_ERR_INIT_FAILED;
     };
     match value {
         Some(text) => unsafe {
@@ -134,39 +134,39 @@ pub(crate) fn write_setting(key: &str, value: Option<&str>, flags: u32) {
                 text.as_ptr(),
                 text.len() as u64,
                 flags,
-            );
+            )
         },
         None => unsafe {
-            ((*host).settings_write)(id.as_ptr(), key.as_ptr(), std::ptr::null(), 0, flags);
+            ((*host).settings_write)(id.as_ptr(), key.as_ptr(), std::ptr::null(), 0, flags)
         },
     }
 }
 
 fn store(session: &Session) {
-    write_setting(
+    let _ = write_setting(
         shares::SHARES_KEY,
         Some(&shares::encode(&session.shares)),
         IC_SETTING_PLAIN,
     );
     if session.has_account() {
-        write_setting(
+        let _ = write_setting(
             account::TOKEN_KEY,
             Some(&session.account.token),
             IC_SETTING_SECRET,
         );
-        write_setting(
+        let _ = write_setting(
             account::LOGIN_KEY,
             Some(&session.account.login),
             IC_SETTING_PLAIN,
         );
-        write_setting(
+        let _ = write_setting(
             account::PREMIUM_KEY,
             Some(if session.account.premium { "1" } else { "0" }),
             IC_SETTING_PLAIN,
         );
     } else {
         for key in [account::TOKEN_KEY, account::LOGIN_KEY, account::PREMIUM_KEY] {
-            write_setting(key, None, IC_SETTING_PLAIN);
+            let _ = write_setting(key, None, IC_SETTING_PLAIN);
         }
     }
 }

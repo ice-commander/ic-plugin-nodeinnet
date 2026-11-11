@@ -21,10 +21,14 @@ async-trait = "0.1"
 chrono = "0.4"
 uuid = { version = "1.8", features = ["v4"] }
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+hostname = "0.4.2"
 tokio = { workspace = true }
 client-core = { workspace = true }
 p2p-handlers = { workspace = true }
 p2p-node = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 

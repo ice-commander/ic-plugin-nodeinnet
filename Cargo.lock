@@ -411,8 +411,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54413ede23c2daf518f35156dfde027feb2374004d63bd497f983c8db9c0e313"
 dependencies = [
  "find-msvc-tools",
- "jobserver",
- "libc",
  "shlex",
 ]
 
@@ -503,6 +501,7 @@ dependencies = [
 [[package]]
 name = "client-core"
 version = "0.1.286"
+source = "git+https://github.com/node-in-net/p2p-common?branch=main#febe1e46c20015a4e05d3803e1217b44168d5119"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
@@ -510,19 +509,15 @@ dependencies = [
  "bytes",
  "futures-util",
  "log",
- "nodeinnet-protocol",
- "openh264",
- "openh264-sys2",
+ "nodeinnet-p2p",
  "p2p-node",
  "reqwest",
- "rtp",
  "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
  "uuid",
  "webrtc",
- "yuv",
 ]
 
 [[package]]
@@ -1326,8 +1321,10 @@ dependencies = [
  "chrono",
  "client-core",
  "futures-util",
+ "hostname",
  "ic-plugin-api",
- "nodeinnet-protocol",
+ "libc",
+ "nodeinnet-p2p",
  "p2p-handlers",
  "p2p-node",
  "reqwest",
@@ -1514,16 +1511,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "jobserver"
-version = "0.1.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
-dependencies = [
- "getrandom 0.4.3",
- "libc",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1545,12 +1532,6 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
-
-[[package]]
-name = "linux-raw-sys"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "litemap"
@@ -1665,12 +1646,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
-name = "nasm-rs"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe4d98d0065f4b1daf164b3eafb11974c94662e5e2396cf03f32d0bb5c17da51"
-
-[[package]]
 name = "nix"
 version = "0.24.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1684,17 +1659,36 @@ dependencies = [
 
 [[package]]
 name = "node-functions"
-version = "0.1.0"
+version = "0.1.286"
+source = "git+https://github.com/node-in-net/p2p-functions?branch=main#87580c77b697842d67ff6cf5f1658a5d5b1a5bc1"
 dependencies = [
  "chrono",
- "nodeinnet-protocol",
- "tempfile",
+ "nodeinnet-p2p",
  "tokio",
 ]
 
 [[package]]
-name = "nodeinnet-protocol"
+name = "nodeinnet-api"
 version = "0.1.0"
+source = "git+https://github.com/node-in-net/p2p-common?branch=main#febe1e46c20015a4e05d3803e1217b44168d5119"
+dependencies = [
+ "argon2",
+ "base64 0.21.7",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "hmac 0.12.1",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+]
+
+[[package]]
+name = "nodeinnet-p2p"
+version = "0.1.0"
+source = "git+https://github.com/node-in-net/p2p-common?branch=main#febe1e46c20015a4e05d3803e1217b44168d5119"
 dependencies = [
  "argon2",
  "base64 0.21.7",
@@ -1703,10 +1697,12 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hmac 0.12.1",
+ "nodeinnet-api",
  "rand 0.8.8",
  "serde",
  "serde_bytes",
  "serde_json",
+ "sha1",
  "sha2",
  "uuid",
 ]
@@ -1777,26 +1773,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "openh264"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e42e632449bb36c5593e4cde7324ed0b93c00d971cea140da60ee8ae04a3dae7"
-dependencies = [
- "openh264-sys2",
-]
-
-[[package]]
-name = "openh264-sys2"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7626c49bfd4e268dea1d3660bc27f2f47765a0ee274060c8c0d62aa3b46a8c7b"
-dependencies = [
- "cc",
- "nasm-rs",
- "walkdir",
-]
-
-[[package]]
 name = "p256"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1810,11 +1786,12 @@ dependencies = [
 [[package]]
 name = "p2p-handlers"
 version = "0.1.286"
+source = "git+https://github.com/node-in-net/p2p-functions?branch=main#87580c77b697842d67ff6cf5f1658a5d5b1a5bc1"
 dependencies = [
  "async-trait",
  "client-core",
  "node-functions",
- "nodeinnet-protocol",
+ "nodeinnet-p2p",
  "p2p-node",
  "serde",
  "serde_json",
@@ -1825,6 +1802,7 @@ dependencies = [
 [[package]]
 name = "p2p-node"
 version = "0.1.286"
+source = "git+https://github.com/node-in-net/p2p-common?branch=main#febe1e46c20015a4e05d3803e1217b44168d5119"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
@@ -1832,7 +1810,7 @@ dependencies = [
  "futures-util",
  "hostname",
  "mdns-sd",
- "nodeinnet-protocol",
+ "nodeinnet-p2p",
  "serde",
  "serde_json",
  "sha2",
@@ -2287,19 +2265,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustix"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
-dependencies = [
- "bitflags 2.13.2",
- "errno",
- "libc",
- "linux-raw-sys",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "rustls"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2354,15 +2319,6 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
-name = "same-file"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
-dependencies = [
- "winapi-util",
-]
 
 [[package]]
 name = "scopeguard"
@@ -2803,19 +2759,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
-name = "tempfile"
-version = "3.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
-dependencies = [
- "fastrand",
- "getrandom 0.4.3",
- "once_cell",
- "rustix",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3131,16 +3074,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1f50000a783467e6c0200f9d10642f4bc424e39efc1b770203e88b488f79292"
 dependencies = [
  "atomic-waker",
-]
-
-[[package]]
-name = "walkdir"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
-dependencies = [
- "same-file",
- "winapi-util",
 ]
 
 [[package]]
@@ -3479,15 +3412,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
 
 [[package]]
-name = "winapi-util"
-version = "0.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3792,15 +3716,6 @@ dependencies = [
  "quote",
  "syn 3.0.6",
  "synstructure 0.14.0",
-]
-
-[[package]]
-name = "yuv"
-version = "0.8.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a295923535c00a4e72a50a0a1130097f93160b39892dd4d2d006b1e2b90d6bf9"
-dependencies = [
- "num-traits",
 ]
 
 [[package]]
