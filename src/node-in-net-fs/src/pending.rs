@@ -30,7 +30,8 @@ pub fn feed_response(msg: P2pMessage) -> Option<P2pMessage> {
         | M::RenameEntryResponse { request_id, .. }
         | M::SetPermissionsResponse { request_id, .. } => *request_id,
         M::FileTransferResponse { transfer_id, .. }
-        | M::FileTransferComplete { transfer_id, .. } => *transfer_id,
+        | M::FileTransferComplete { transfer_id, .. }
+        | M::FileTransferReceipt { transfer_id, .. } => *transfer_id,
         _ => return Some(msg),
     };
     deliver(id, msg)

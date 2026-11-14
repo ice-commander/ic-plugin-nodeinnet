@@ -156,16 +156,3 @@ pub enum ContentWait {
 pub fn net_content_wait() -> ContentWait {
     ContentWait::Infinite
 }
-
-pub fn mode_of(meta: &std::fs::Metadata) -> Option<u32> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some(meta.mode())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = meta;
-        None
-    }
-}

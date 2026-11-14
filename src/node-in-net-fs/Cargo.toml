@@ -30,6 +30,9 @@ p2p-node = { workspace = true }
 [target.'cfg(target_os = "android")'.dependencies]
 libc = "0.2"
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+p2p-handlers = { workspace = true, features = ["feature-terminal"] }
+
 [dev-dependencies]
 
 [features]

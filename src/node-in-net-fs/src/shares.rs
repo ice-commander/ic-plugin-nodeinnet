@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 
 pub const SHARES_KEY: &str = "shares";
+pub const NOTED_KEY: &str = "lan_shares_noted";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Share {
@@ -32,13 +33,16 @@ pub fn parse(source: &str) -> Vec<Share> {
         .collect()
 }
 
-pub fn encode(list: &[Share]) -> String {
+pub fn listed(list: &[Share]) -> Value {
     Value::Array(
         list.iter()
             .map(|share| json!({ "name": share.name, "path": share.path }))
             .collect(),
     )
-    .to_string()
+}
+
+pub fn encode(list: &[Share]) -> String {
+    listed(list).to_string()
 }
 
 pub fn add(list: &[Share], name: &str, path: &str) -> Result<Vec<Share>, String> {

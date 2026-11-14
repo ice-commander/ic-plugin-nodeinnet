@@ -76,6 +76,8 @@ pub struct RemoteFileSystemRpc {
 }
 
 const PEER_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const RECEIPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+const SETID_BITS: u32 = 0o6000;
 
 pub struct PendingGuard(uuid::Uuid);
 
@@ -84,6 +86,7 @@ struct TempFileGuard(std::path::PathBuf);
 impl Drop for TempFileGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_file(self.0.with_extension("part"));
     }
 }
 
@@ -115,6 +118,17 @@ impl RemoteFileSystemRpc {
             .send(NetCmd::SendToPeer(self.peer_id.clone(), msg))
             .await
             .map_err(|_| AppError::Remote("peer link is closed".to_string()))
+    }
+
+    async fn queue(&self, msg: P2pMessage) -> Result<(), AppError> {
+        tokio::time::timeout(RECEIPT_TIMEOUT, self.send_to_peer_await(msg))
+            .await
+            .unwrap_or_else(|_| {
+                Err(AppError::Remote(format!(
+                    "upload stalled: nothing left the queue for {} min",
+                    RECEIPT_TIMEOUT.as_secs() / 60
+                )))
+            })
     }
 
     pub fn send_to_peer(&self, msg: P2pMessage) -> Result<(), AppError> {
@@ -158,7 +172,7 @@ impl RemoteFileSystemRpc {
     }
 
     pub async fn await_peer(
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<P2pMessage>,
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<P2pMessage>,
         what: &str,
     ) -> Result<P2pMessage, AppError> {
         match tokio::time::timeout(PEER_RESPONSE_TIMEOUT, rx.recv()).await {
@@ -168,6 +182,25 @@ impl RemoteFileSystemRpc {
                 "{what}: no response from the peer within {}s",
                 PEER_RESPONSE_TIMEOUT.as_secs()
             ))),
+        }
+    }
+
+    async fn receipt(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<P2pMessage>,
+    ) -> Result<(), AppError> {
+        loop {
+            match rx.recv().await {
+                Some(P2pMessage::FileTransferReceipt { result, .. }) => {
+                    return result
+                        .map_err(|reason| AppError::Remote(format!("upload failed: {reason}")))
+                }
+                Some(_) => continue,
+                None => {
+                    return Err(AppError::Remote(
+                        "upload: the request was dropped".to_string(),
+                    ))
+                }
+            }
         }
     }
 }
@@ -193,7 +226,7 @@ impl RemoteFileSystemRpc {
         permissions: Option<u32>,
     ) -> Result<(), AppError> {
         let request_id = uuid::Uuid::new_v4();
-        let (rx, _guard) = self.register(request_id);
+        let (mut rx, _guard) = self.register(request_id);
 
         self.send_to_peer(P2pMessage::CreateDirectoryRequest {
             request_id,
@@ -203,7 +236,7 @@ impl RemoteFileSystemRpc {
             permissions,
         })?;
 
-        match Self::await_peer(rx, "create directory").await? {
+        match Self::await_peer(&mut rx, "create directory").await? {
             P2pMessage::CreateDirectoryResponse { result, .. } => result.map_err(AppError::Remote),
             _ => Err(AppError::Remote(
                 "unexpected reply to create directory".to_string(),
@@ -220,7 +253,7 @@ impl RemoteFileSystemRpc {
         tokio::spawn(async move {
             for path in paths {
                 let request_id = uuid::Uuid::new_v4();
-                let (rx, _guard) = worker.register(request_id);
+                let (mut rx, _guard) = worker.register(request_id);
 
                 worker
                     .send_to_peer_await(P2pMessage::DeleteEntryRequest {
@@ -230,7 +263,7 @@ impl RemoteFileSystemRpc {
                     })
                     .await?;
 
-                match Self::await_peer(rx, "delete entry").await? {
+                match Self::await_peer(&mut rx, "delete entry").await? {
                     P2pMessage::DeleteEntryResponse { result, .. } => {
                         result.map_err(|e| AppError::Remote(format!("{path}: {e}")))?
                     }
@@ -249,7 +282,7 @@ impl RemoteFileSystemRpc {
 
     pub async fn rename_entry(&self, path: String, new_path: String) -> Result<(), AppError> {
         let request_id = uuid::Uuid::new_v4();
-        let (rx, _guard) = self.register(request_id);
+        let (mut rx, _guard) = self.register(request_id);
 
         self.send_to_peer(P2pMessage::RenameEntryRequest {
             request_id,
@@ -258,7 +291,7 @@ impl RemoteFileSystemRpc {
             new_path,
         })?;
 
-        match Self::await_peer(rx, "rename entry").await? {
+        match Self::await_peer(&mut rx, "rename entry").await? {
             P2pMessage::RenameEntryResponse { result, .. } => result.map_err(AppError::Remote),
             _ => Err(AppError::Remote("unexpected reply to rename".to_string())),
         }
@@ -274,48 +307,6 @@ impl RemoteFileSystemRpc {
         }) {
             crate::note(&format!("[P2P] download request not sent: {e}"));
         }
-    }
-
-    pub fn trigger_file_upload(
-        &self,
-        target_path: String,
-        file_name: String,
-        local_file_path: std::path::PathBuf,
-        transfer_id: uuid::Uuid,
-    ) {
-        let metadata = std::fs::metadata(&local_file_path);
-        let total_size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-        let permissions = metadata.ok().as_ref().and_then(crate::error::mode_of);
-
-        if let Err(e) = self.net_tx.try_send(NetCmd::RegisterUpload {
-            peer_id: self.peer_id.clone(),
-            transfer_id,
-            local_file_path,
-        }) {
-            crate::note(&format!("[P2P] upload registration not sent: {e}"));
-            return;
-        }
-
-        if let Err(e) = self.send_to_peer(P2pMessage::FileUploadRequest {
-            resource_id: self.resource_id.clone(),
-            target_path,
-            file_name,
-            total_size,
-            transfer_id,
-            permissions,
-        }) {
-            crate::note(&format!("[P2P] upload request not sent: {e}"));
-        }
-    }
-
-    pub fn can_mount(&self) -> bool {
-        true
-    }
-
-    pub fn mount_bridge(
-        &self,
-    ) -> Option<tokio::sync::mpsc::Sender<nodeinnet_protocol::P2pMessage>> {
-        Some(self.spawn_mount_bridge())
     }
 
     pub async fn read_file(
@@ -395,9 +386,9 @@ impl RemoteFileSystemRpc {
         };
         let total_size = content.len() as u64;
 
-        let (rx, _guard) = self.register(transfer_id);
+        let (mut rx, _guard) = self.register(transfer_id);
 
-        self.send_to_peer_await(P2pMessage::FileUploadRequest {
+        self.queue(P2pMessage::FileUploadRequest {
             resource_id: self.resource_id.clone(),
             target_path,
             file_name,
@@ -407,12 +398,19 @@ impl RemoteFileSystemRpc {
         })
         .await?;
 
-        match Self::await_peer(rx, "upload request").await? {
+        match Self::await_peer(&mut rx, "upload request").await? {
+            P2pMessage::FileTransferResponse {
+                status: nodeinnet_protocol::FileTransferStatus::Accepted { .. },
+                ..
+            } => {}
             P2pMessage::FileTransferResponse {
                 status: nodeinnet_protocol::FileTransferStatus::Rejected { reason },
                 ..
             } => return Err(AppError::Remote(format!("upload rejected: {reason}"))),
-            P2pMessage::FileTransferResponse { .. } => {}
+            P2pMessage::FileTransferReceipt {
+                result: Err(reason),
+                ..
+            } => return Err(AppError::Remote(format!("upload failed: {reason}"))),
             _ => return Err(AppError::Remote("unexpected reply to upload".to_string())),
         }
 
@@ -422,12 +420,12 @@ impl RemoteFileSystemRpc {
             peer_id: self.peer_id.clone(),
         };
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<u64>(8);
-        let upload = tokio::spawn(async move {
+        let mut upload = tokio::spawn(async move {
             let mut offset = 0usize;
             let mut last_sent = std::time::Instant::now() - std::time::Duration::from_millis(200);
             for chunk_data in content.chunks(16 * 1024) {
                 worker
-                    .send_to_peer_await(P2pMessage::FileChunk {
+                    .queue(P2pMessage::FileChunk {
                         transfer_id,
                         offset: offset as u64,
                         data: chunk_data.to_vec(),
@@ -441,7 +439,7 @@ impl RemoteFileSystemRpc {
             }
             let _ = progress_tx.try_send(offset as u64);
             worker
-                .send_to_peer_await(P2pMessage::FileTransferComplete {
+                .queue(P2pMessage::FileTransferComplete {
                     transfer_id,
                     checksum: None,
                 })
@@ -449,20 +447,38 @@ impl RemoteFileSystemRpc {
             Ok::<(), AppError>(())
         });
 
-        while let Some(bytes) = progress_rx.recv().await {
-            if let Some(ref cb) = progress_callback {
-                cb(bytes);
+        let streamed = loop {
+            tokio::select! {
+                biased;
+                Some(bytes) = progress_rx.recv() => {
+                    if let Some(ref cb) = progress_callback {
+                        cb(bytes);
+                    }
+                }
+                done = &mut upload => break done,
+                answer = Self::receipt(&mut rx) => {
+                    upload.abort();
+                    return Err(answer.err().unwrap_or_else(|| {
+                        AppError::Remote("unexpected reply to upload".to_string())
+                    }));
+                }
             }
-        }
+        };
+        streamed.map_err(|e| AppError::Other(format!("upload task: {e}")))??;
 
-        upload
+        tokio::time::timeout(RECEIPT_TIMEOUT, Self::receipt(&mut rx))
             .await
-            .map_err(|e| AppError::Other(format!("upload task: {e}")))?
+            .unwrap_or_else(|_| {
+                Err(AppError::Remote(format!(
+                    "upload: no confirmation from the peer within {} min",
+                    RECEIPT_TIMEOUT.as_secs() / 60
+                )))
+            })
     }
 
     pub async fn list_dir(&self, path: String) -> Result<Vec<RemoteFileEntry>, AppError> {
         let request_id = uuid::Uuid::new_v4();
-        let (rx, _guard) = self.register(request_id);
+        let (mut rx, _guard) = self.register(request_id);
 
         self.send_to_peer(P2pMessage::RequestEntries {
             request_id,
@@ -470,7 +486,7 @@ impl RemoteFileSystemRpc {
             resource_id: self.resource_id.clone(),
         })?;
 
-        match Self::await_peer(rx, "list directory").await? {
+        match Self::await_peer(&mut rx, "list directory").await? {
             P2pMessage::EntriesResponse {
                 directories,
                 files,
@@ -485,7 +501,8 @@ impl RemoteFileSystemRpc {
                     for (i, d) in dw.into_iter().enumerate() {
                         let permissions = directories_permissions
                             .as_ref()
-                            .and_then(|v| v.get(i).copied().flatten());
+                            .and_then(|v| v.get(i).copied().flatten())
+                            .map(|mode| mode & !SETID_BITS);
                         entries.push(RemoteFileEntry {
                             name: d.0,
                             is_dir: true,
@@ -499,7 +516,8 @@ impl RemoteFileSystemRpc {
                     for (i, d) in directories.into_iter().enumerate() {
                         let permissions = directories_permissions
                             .as_ref()
-                            .and_then(|v| v.get(i).copied().flatten());
+                            .and_then(|v| v.get(i).copied().flatten())
+                            .map(|mode| mode & !SETID_BITS);
                         entries.push(RemoteFileEntry {
                             name: d,
                             is_dir: true,
@@ -515,7 +533,8 @@ impl RemoteFileSystemRpc {
                     for (i, f) in fw.into_iter().enumerate() {
                         let permissions = files_permissions
                             .as_ref()
-                            .and_then(|v| v.get(i).copied().flatten());
+                            .and_then(|v| v.get(i).copied().flatten())
+                            .map(|mode| mode & !SETID_BITS);
                         entries.push(RemoteFileEntry {
                             name: f.0,
                             is_dir: false,
@@ -529,7 +548,8 @@ impl RemoteFileSystemRpc {
                     for (i, f) in files.into_iter().enumerate() {
                         let permissions = files_permissions
                             .as_ref()
-                            .and_then(|v| v.get(i).copied().flatten());
+                            .and_then(|v| v.get(i).copied().flatten())
+                            .map(|mode| mode & !SETID_BITS);
                         entries.push(RemoteFileEntry {
                             name: f.0,
                             is_dir: false,
@@ -551,7 +571,7 @@ impl RemoteFileSystemRpc {
 
     pub async fn set_permissions(&self, path: String, permissions: u32) -> Result<(), AppError> {
         let request_id = uuid::Uuid::new_v4();
-        let (rx, _guard) = self.register(request_id);
+        let (mut rx, _guard) = self.register(request_id);
 
         self.send_to_peer(P2pMessage::SetPermissionsRequest {
             request_id,
@@ -560,7 +580,7 @@ impl RemoteFileSystemRpc {
             permissions,
         })?;
 
-        match Self::await_peer(rx, "set permissions").await? {
+        match Self::await_peer(&mut rx, "set permissions").await? {
             P2pMessage::SetPermissionsResponse { result, .. } => result.map_err(AppError::Remote),
             _ => Err(AppError::Remote(
                 "unexpected reply to set permissions".to_string(),
@@ -591,24 +611,5 @@ impl RemoteFileSystemRpc {
         } else {
             "/com/icecommander/gtk/folder.svg".to_string()
         }
-    }
-}
-
-impl RemoteFileSystemRpc {
-    pub fn spawn_mount_bridge(&self) -> tokio::sync::mpsc::Sender<nodeinnet_protocol::P2pMessage> {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<nodeinnet_protocol::P2pMessage>(32);
-        let net_tx = self.net_tx.clone();
-        let peer_id_clone = self.peer_id.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                while let Some(msg) = rx.recv().await {
-                    let _ = net_tx
-                        .send(NetCmd::SendToPeer(peer_id_clone.clone(), msg))
-                        .await;
-                }
-            });
-        });
-        tx
     }
 }

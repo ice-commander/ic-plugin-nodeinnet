@@ -12,7 +12,7 @@ nodeinnet-protocol = { package = "nodeinnet-p2p", git = "https://github.com/node
 p2p-node = { git = "https://github.com/node-in-net/p2p-common", branch = "main", default-features = false }
 # Screen sharing off: Cisco's OpenH264 royalty grant covers Cisco's binary, not one built here.
 client-core = { git = "https://github.com/node-in-net/p2p-common", branch = "main", default-features = false }
-# Files only: no terminal, desktop, registry or proxy is served to a peer.
+# Files, and the terminal except on Android (src/node-in-net-fs/Cargo.toml): no desktop, registry or proxy is served to a peer.
 p2p-handlers = { git = "https://github.com/node-in-net/p2p-functions", branch = "main", default-features = false, features = ["feature-fm"] }
 ic-plugin-api = { git = "https://github.com/ice-commander/plugin-api.git", branch = "main" }
 
@@ -21,3 +21,7 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+# Its Android getifaddrs() shim binds a netlink socket, which Android denies apps targeting API 30+; Bionic's own works.
+webrtc-util = { path = "vendor/webrtc-util" }

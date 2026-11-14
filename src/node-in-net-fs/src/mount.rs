@@ -2,6 +2,7 @@
 
 use crate::error::RemoteFileEntry;
 use crate::p2p_rpc::RemoteFileSystemRpc;
+use client_core::{LanCmd, NetCmd};
 use ic_plugin_api::{
     IcBytes, IcConnectionVTable, IcDirEntry, IcFsHandle, IcFsVTable, IcListing, IC_ERR_INIT_FAILED,
     IC_OK,
@@ -9,9 +10,11 @@ use ic_plugin_api::{
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
+use tokio::sync::mpsc::error::TrySendError;
 
 struct Mounted {
-    rpc: RemoteFileSystemRpc,
+    rpc: Result<RemoteFileSystemRpc, String>,
+    lan_failures_before: Option<u64>,
     trouble: RefCell<String>,
     // Kept alive while the host reads what `list`, `read` and `last_error` answered.
     names: RefCell<Vec<CString>>,
@@ -27,6 +30,17 @@ fn held(handle: IcFsHandle) -> Option<&'static Mounted> {
     Some(unsafe { &*(handle as *const Mounted) })
 }
 
+fn reached(handle: IcFsHandle) -> Option<(&'static Mounted, &'static RemoteFileSystemRpc)> {
+    let mounted = held(handle)?;
+    match &mounted.rpc {
+        Ok(rpc) => Some((mounted, rpc)),
+        Err(why) => {
+            blamed(mounted, why.clone());
+            None
+        }
+    }
+}
+
 fn path_of(path: *const c_char) -> String {
     if path.is_null() {
         return "/".to_string();
@@ -37,18 +51,76 @@ fn path_of(path: *const c_char) -> String {
 }
 
 fn awaited<T>(
+    mounted: &Mounted,
     work: impl std::future::Future<Output = Result<T, crate::error::AppError>>,
 ) -> Result<T, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|why| format!("no runtime: {why}"))?;
-    runtime.block_on(work).map_err(|why| why.to_string())
+    let (Some(counted), Ok(rpc)) = (mounted.lan_failures_before, &mounted.rpc) else {
+        return runtime.block_on(work).map_err(|why| why.to_string());
+    };
+    runtime.block_on(async {
+        tokio::select! {
+            done = work => done.map_err(|why| why.to_string()),
+            why = crate::lan::open_failure_after(&rpc.peer_id, counted) => Err(why),
+        }
+    })
 }
 
 fn blamed(mounted: &Mounted, why: String) {
     crate::note(&format!("peer filesystem: {why}"));
     *mounted.trouble.borrow_mut() = why;
+}
+
+fn handle_of(
+    rpc: Result<RemoteFileSystemRpc, String>,
+    lan_failures_before: Option<u64>,
+) -> IcFsHandle {
+    Box::into_raw(Box::new(Mounted {
+        rpc,
+        lan_failures_before,
+        trouble: RefCell::new(String::new()),
+        names: RefCell::new(Vec::new()),
+        rows: RefCell::new(Vec::new()),
+        bytes: RefCell::new(Vec::new()),
+        said: RefCell::new(CString::default()),
+    })) as IcFsHandle
+}
+
+fn asked_to_pair(id: &str) -> String {
+    let (kept, ask) = crate::pairing::next_try(id);
+    if ask {
+        crate::net::lan(LanCmd::Pair(id.to_string()));
+    }
+    kept.unwrap_or_else(|| crate::i18n::tr("nodeinnet.pair_then_open"))
+}
+
+fn over_the_local_network(peer_id: String, resource_id: String) -> IcFsHandle {
+    let Some(net_tx) = crate::net::sender() else {
+        return handle_of(Err("the local network is off".to_string()), None);
+    };
+    let counted = crate::lan::open_failures();
+    // On this queue, ahead of the first listing: the session must exist when that arrives.
+    if let Err(refused) = net_tx.try_send(NetCmd::Lan(LanCmd::Open(peer_id.clone()))) {
+        let why = match refused {
+            TrySendError::Full(_) => "the network is busy; open it again in a moment",
+            TrySendError::Closed(_) => "the local network is off",
+        };
+        return handle_of(Err(why.to_string()), None);
+    }
+    crate::note(&format!(
+        "mounting {resource_id} on {peer_id} over the local network"
+    ));
+    handle_of(
+        Ok(RemoteFileSystemRpc {
+            net_tx,
+            resource_id,
+            peer_id,
+        }),
+        Some(counted),
+    )
 }
 
 extern "C" fn open(settings: *const u8, len: u64, _user_data: *mut c_void) -> IcFsHandle {
@@ -59,9 +131,18 @@ extern "C" fn open(settings: *const u8, len: u64, _user_data: *mut c_void) -> Ic
     let Ok(held) = serde_json::from_slice::<serde_json::Value>(raw) else {
         return std::ptr::null_mut();
     };
+    if let Some(id) = held["pair"].as_str().filter(|id| !id.is_empty()) {
+        return handle_of(Err(asked_to_pair(id)), None);
+    }
     let peer_id = held["peer_id"].as_str().unwrap_or_default().to_string();
     let resource_id = held["resource_id"].as_str().unwrap_or_default().to_string();
-    let Some(net_tx) = crate::net::sender() else {
+    if held["link"].as_str() == Some("lan") {
+        if peer_id.is_empty() || resource_id.is_empty() {
+            return std::ptr::null_mut();
+        }
+        return over_the_local_network(peer_id, resource_id);
+    }
+    let Some(net_tx) = crate::net::sender().filter(|_| crate::net::attached()) else {
         crate::note("a peer share was opened while no account is signed in");
         return std::ptr::null_mut();
     };
@@ -69,21 +150,16 @@ extern "C" fn open(settings: *const u8, len: u64, _user_data: *mut c_void) -> Ic
         return std::ptr::null_mut();
     }
     // Dial first so the link is up before the first listing is asked for.
-    let _ = net_tx.try_send(client_core::NetCmd::Call(peer_id.clone()));
+    let _ = net_tx.try_send(NetCmd::Call(peer_id.clone()));
     crate::note(&format!("mounting {resource_id} on {peer_id}"));
-    let mounted = Box::new(Mounted {
-        rpc: RemoteFileSystemRpc {
+    handle_of(
+        Ok(RemoteFileSystemRpc {
             net_tx,
             resource_id,
             peer_id,
-        },
-        trouble: RefCell::new(String::new()),
-        names: RefCell::new(Vec::new()),
-        rows: RefCell::new(Vec::new()),
-        bytes: RefCell::new(Vec::new()),
-        said: RefCell::new(CString::default()),
-    });
-    Box::into_raw(mounted) as IcFsHandle
+        }),
+        None,
+    )
 }
 
 extern "C" fn close(handle: IcFsHandle) {
@@ -120,10 +196,10 @@ fn listing_of(mounted: &Mounted, entries: Vec<RemoteFileEntry>) -> IcListing {
 }
 
 extern "C" fn list(handle: IcFsHandle, path: *const c_char) -> IcListing {
-    let Some(mounted) = held(handle) else {
+    let Some((mounted, rpc)) = reached(handle) else {
         return IcListing::EMPTY;
     };
-    match awaited(mounted.rpc.list_dir(path_of(path))) {
+    match awaited(mounted, rpc.list_dir(path_of(path))) {
         Ok(entries) => listing_of(mounted, entries),
         Err(why) => {
             blamed(mounted, why);
@@ -146,10 +222,10 @@ extern "C" fn stream_open(
     if mode != ic_plugin_api::IC_OPEN_READ {
         return std::ptr::null_mut();
     }
-    let Some(mounted) = held(handle) else {
+    let Some((mounted, rpc)) = reached(handle) else {
         return std::ptr::null_mut();
     };
-    match awaited(mounted.rpc.read_file(path_of(path), None)) {
+    match awaited(mounted, rpc.read_file(path_of(path), None)) {
         Ok(body) => Box::into_raw(Box::new(Streaming { body, at: 0 })) as ic_plugin_api::IcFsStream,
         Err(why) => {
             blamed(mounted, why);
@@ -182,10 +258,10 @@ extern "C" fn stream_close(stream: ic_plugin_api::IcFsStream) -> c_int {
 }
 
 extern "C" fn read(handle: IcFsHandle, path: *const c_char) -> IcBytes {
-    let Some(mounted) = held(handle) else {
+    let Some((mounted, rpc)) = reached(handle) else {
         return IcBytes::EMPTY;
     };
-    match awaited(mounted.rpc.read_file(path_of(path), None)) {
+    match awaited(mounted, rpc.read_file(path_of(path), None)) {
         Ok(bytes) => {
             *mounted.bytes.borrow_mut() = bytes;
             let borrowed = mounted.bytes.borrow();
@@ -224,7 +300,7 @@ fn hand_over(trouble: &RefCell<String>, said: &RefCell<CString>) -> *const c_cha
 }
 
 extern "C" fn write(handle: IcFsHandle, path: *const c_char, bytes: *const u8, len: u64) -> c_int {
-    let Some(mounted) = held(handle) else {
+    let Some((mounted, rpc)) = reached(handle) else {
         return IC_ERR_INIT_FAILED;
     };
     let body = if bytes.is_null() || len == 0 {
@@ -232,7 +308,7 @@ extern "C" fn write(handle: IcFsHandle, path: *const c_char, bytes: *const u8, l
     } else {
         unsafe { std::slice::from_raw_parts(bytes, len as usize) }.to_vec()
     };
-    match awaited(mounted.rpc.write_file(path_of(path), body, None, None)) {
+    match awaited(mounted, rpc.write_file(path_of(path), body, None, None)) {
         Ok(()) => IC_OK,
         Err(why) => {
             blamed(mounted, why);
@@ -242,7 +318,7 @@ extern "C" fn write(handle: IcFsHandle, path: *const c_char, bytes: *const u8, l
 }
 
 extern "C" fn create_dir(handle: IcFsHandle, path: *const c_char) -> c_int {
-    let Some(mounted) = held(handle) else {
+    let Some((mounted, rpc)) = reached(handle) else {
         return IC_ERR_INIT_FAILED;
     };
     let full = path_of(path);
@@ -255,7 +331,7 @@ extern "C" fn create_dir(handle: IcFsHandle, path: *const c_char) -> c_int {
     } else {
         parent
     };
-    match awaited(mounted.rpc.create_directory(parent, name, None)) {
+    match awaited(mounted, rpc.create_directory(parent, name, None)) {
         Ok(()) => IC_OK,
         Err(why) => {
             blamed(mounted, why);
@@ -265,10 +341,10 @@ extern "C" fn create_dir(handle: IcFsHandle, path: *const c_char) -> c_int {
 }
 
 extern "C" fn remove(handle: IcFsHandle, path: *const c_char) -> c_int {
-    let Some(mounted) = held(handle) else {
+    let Some((mounted, rpc)) = reached(handle) else {
         return IC_ERR_INIT_FAILED;
     };
-    match awaited(mounted.rpc.delete_entries(vec![path_of(path)])) {
+    match awaited(mounted, rpc.delete_entries(vec![path_of(path)])) {
         Ok(()) => IC_OK,
         Err(why) => {
             blamed(mounted, why);
@@ -278,10 +354,10 @@ extern "C" fn remove(handle: IcFsHandle, path: *const c_char) -> c_int {
 }
 
 extern "C" fn rename(handle: IcFsHandle, from: *const c_char, to: *const c_char) -> c_int {
-    let Some(mounted) = held(handle) else {
+    let Some((mounted, rpc)) = reached(handle) else {
         return IC_ERR_INIT_FAILED;
     };
-    match awaited(mounted.rpc.rename_entry(path_of(from), path_of(to))) {
+    match awaited(mounted, rpc.rename_entry(path_of(from), path_of(to))) {
         Ok(()) => IC_OK,
         Err(why) => {
             blamed(mounted, why);
@@ -300,10 +376,10 @@ struct Shell {
 }
 
 extern "C" fn shell_available(handle: IcFsHandle) -> c_int {
-    let Some(mounted) = held(handle) else {
+    let Some(Ok(rpc)) = held(handle).map(|mounted| &mounted.rpc) else {
         return 0;
     };
-    i32::from(crate::p2p_rpc::peer_terminal(&mounted.rpc.peer_id).is_some())
+    i32::from(crate::p2p_rpc::peer_terminal(&rpc.peer_id).is_some())
 }
 
 extern "C" fn shell_open(
@@ -312,17 +388,17 @@ extern "C" fn shell_open(
     rows: u32,
     cols: u32,
 ) -> *mut c_void {
-    let Some(mounted) = held(handle) else {
+    let Some((_, rpc)) = reached(handle) else {
         return std::ptr::null_mut();
     };
-    let Some(resource_id) = crate::p2p_rpc::peer_terminal(&mounted.rpc.peer_id) else {
+    let Some(resource_id) = crate::p2p_rpc::peer_terminal(&rpc.peer_id) else {
         crate::note("this peer shares no terminal");
         return std::ptr::null_mut();
     };
     crate::note(&format!("opening a shell on {resource_id}"));
     let session = crate::p2p_shell::open_p2p_shell(
-        mounted.rpc.net_tx.clone(),
-        mounted.rpc.peer_id.clone(),
+        rpc.net_tx.clone(),
+        rpc.peer_id.clone(),
         resource_id.clone(),
         rows as u16,
         cols as u16,

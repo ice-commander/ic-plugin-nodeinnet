@@ -1,5 +1,3 @@
-//! Client side only: this host never serves its own shell to a peer.
-
 use client_core::NetCmd;
 use nodeinnet_protocol::P2pMessage;
 use std::collections::HashMap;
